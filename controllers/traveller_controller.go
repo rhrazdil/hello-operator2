@@ -18,17 +18,47 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	mydomainv1alpha1 "hello-operator2/api/v1alpha1"
+)
+
+var (
+	onLabelsUpdatedForThisNode = predicate.Funcs{
+
+		CreateFunc: func(createEvent event.CreateEvent) bool {
+			fmt.Println("CreateFunc")
+			return false
+		},
+		DeleteFunc: func(event.DeleteEvent) bool {
+			fmt.Println("DeleteFunc")
+			return false
+		},
+		UpdateFunc: func(updateEvent event.UpdateEvent) bool {
+			fmt.Println("UpdateFunc")
+			return false
+		},
+		GenericFunc: func(event.GenericEvent) bool {
+			fmt.Println("GenericFunc")
+			return false
+		},
+	}
 )
 
 // TravellerReconciler reconciles a Traveller object
@@ -53,11 +83,12 @@ type TravellerReconciler struct {
 func (r *TravellerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx).WithValues("Traveller", req.NamespacedName)
 
+	fmt.Println("In reconciler ", req.NamespacedName)
 	// Fetch the Traveller instance
 	instance := &mydomainv1alpha1.Traveller{}
 	err := r.Get(context.TODO(), req.NamespacedName, instance)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
@@ -77,23 +108,34 @@ func (r *TravellerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return *result, err
 	}
 
-	// Check if this Service already exists
-	result, err = r.ensureService(req, instance, r.backendService(instance))
-	if result != nil {
-		log.Error(err, "Service Not ready")
-		return *result, err
-	}
-
-	// Deployment and Service already exists - don't requeue
-	log.Info("Skip reconcile: Deployment and service already exists",
-		"Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
-
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *TravellerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	allTravellers := handler.MapFunc(
+		func(client.Object) []reconcile.Request {
+			return []reconcile.Request{}
+		})
+
+	// Reconcile travellers when created
+	err := ctrl.NewControllerManagedBy(mgr).
 		For(&mydomainv1alpha1.Traveller{}).
 		Complete(r)
+	if err != nil {
+		return err
+	}
+
+	// Reconcile all Travellers if Node is updated (for example labels are changed)
+	err = ctrl.NewControllerManagedBy(mgr).
+		For(&corev1.Node{}).
+		Watches(&source.Kind{Type: &corev1.Node{}},
+			handler.EnqueueRequestsFromMapFunc(allTravellers),
+			builder.WithPredicates(onLabelsUpdatedForThisNode)).
+		Complete(r)
+	if err != nil {
+		return errors.Wrap(err, "failed to add controller to NNCP Reconciler listening Node events")
+	}
+
+	return nil
 }

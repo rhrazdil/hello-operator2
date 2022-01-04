@@ -80,6 +80,16 @@ func (r *TravellerReconciler) backendDeployment(v *mydomainv1alpha1.Traveller) *
 						Image:           "paulbouwer/hello-kubernetes:1.10",
 						ImagePullPolicy: corev1.PullAlways,
 						Name:            "hello-pod",
+						Env: []corev1.EnvVar{
+							{
+								Name: "NODE_NAME",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{
+										FieldPath: "spec.nodeName",
+									},
+								},
+							},
+						},
 						Ports: []corev1.ContainerPort{{
 							ContainerPort: 8080,
 							Name:          "hello",
